@@ -11,3 +11,4 @@ optim_data/
 _site
 *.lock
 .sass-cache
+*.h5f
