@@ -16,10 +16,6 @@ import random
 # - read the high level description of the state
 # The objective, stop condition, and other gym-related
 # methods are enclosed in the OsimEnv class
-
-DEFAULT_OBS_AS_DICT = False
-
-
 class OsimModel(object):
     # Initialize simulation
     stepsize = 0.01
@@ -335,7 +331,7 @@ class OsimEnv(gym.Env):
     def get_action_space_size(self):
         return self.osim_model.get_action_space_size()
 
-    def reset(self, project=True, obs_as_dict=DEFAULT_OBS_AS_DICT):
+    def reset(self, project=True, obs_as_dict=True):
         self.osim_model.reset()
 
         if not project:
@@ -344,8 +340,8 @@ class OsimEnv(gym.Env):
             return self.get_observation_dict()
         return self.get_observation()
 
-    def step(self, action, project=True, obs_as_dict=DEFAULT_OBS_AS_DICT):
-        self.prev_state_desc = self.get_state_desc()
+    def step(self, action, project=True, obs_as_dict=True):
+        self.prev_state_desc = self.get_state_desc()        
         self.osim_model.actuate(action)
         self.osim_model.integrate()
 
@@ -494,7 +490,7 @@ class L2M2019Env(OsimEnv):
         self.vtgt = VTgtField(visualize=visualize, version=self.difficulty, dt=self.osim_model.stepsize)
         self.obs_vtgt_space = self.vtgt.vtgt_space
 
-    def reset(self, project=True, seed=None, init_pose=None, obs_as_dict=DEFAULT_OBS_AS_DICT):
+    def reset(self, project=True, seed=None, init_pose=None, obs_as_dict=True):
         self.t = 0
         self.init_reward()
         self.vtgt.reset(version=self.difficulty, seed=seed)
@@ -550,7 +546,7 @@ class L2M2019Env(OsimEnv):
         observation_space = np.concatenate((self.obs_vtgt_space, self.obs_body_space), axis=1)
         self.observation_space = convert_to_gym(observation_space)
 
-    def step(self, action, project=True, obs_as_dict=DEFAULT_OBS_AS_DICT):
+    def step(self, action, project=True, obs_as_dict=True):
         action_mapped = [action[i] for i in self.act2mus]
         observation, reward, done, info = super(L2M2019Env, self).step(action_mapped, project=project, obs_as_dict=obs_as_dict)
         self.t += self.osim_model.stepsize

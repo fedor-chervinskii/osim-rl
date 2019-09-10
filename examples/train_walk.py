@@ -12,14 +12,50 @@ from rl.random import OrnsteinUhlenbeckProcess
 from rl.callbacks import Callback, ModelIntervalCheckpoint
 
 import sys
-sys.path = [''] + sys.path
 from osim.env import L2M2019Env
 
 import argparse
 import pickle
+import numpy as np
 
 
-PREFIX = 'ddpg_simple_1m_L2M2019Env'
+PREFIX = 'snapshots/ddpg_simple_1m_L2M2019Env'
+LENGTH0 = 1.
+
+
+def get_observation(obs_dict):
+    # Augmented environment from the L2R challenge
+    res = []
+
+    # target velocity field (in body frame)
+    v_tgt = np.ndarray.flatten(obs_dict['v_tgt_field'])
+    res += v_tgt.tolist()
+
+    res.append(obs_dict['pelvis']['height'])
+    res.append(obs_dict['pelvis']['pitch'])
+    res.append(obs_dict['pelvis']['roll'])
+    res.append(obs_dict['pelvis']['vel'][0])
+    res.append(obs_dict['pelvis']['vel'][1])
+    res.append(obs_dict['pelvis']['vel'][2])
+    res.append(obs_dict['pelvis']['vel'][3])
+    res.append(obs_dict['pelvis']['vel'][4])
+    res.append(obs_dict['pelvis']['vel'][5])
+
+    for leg in ['r_leg', 'l_leg']:
+        res += obs_dict[leg]['ground_reaction_forces']
+        res.append(obs_dict[leg]['joint']['hip_abd'])
+        res.append(obs_dict[leg]['joint']['hip'])
+        res.append(obs_dict[leg]['joint']['knee'])
+        res.append(obs_dict[leg]['joint']['ankle'])
+        res.append(obs_dict[leg]['d_joint']['hip_abd'])
+        res.append(obs_dict[leg]['d_joint']['hip'])
+        res.append(obs_dict[leg]['d_joint']['knee'])
+        res.append(obs_dict[leg]['d_joint']['ankle'])
+        for MUS in ['HAB', 'HAD', 'HFL', 'GLU', 'HAM', 'RF', 'VAS', 'BFSH', 'GAS', 'SOL', 'TA']:
+            res.append(obs_dict[leg][MUS]['f'])
+            res.append(obs_dict[leg][MUS]['l'])
+            res.append(obs_dict[leg][MUS]['v'])
+    return res
 
 
 def save_memory(memory, filename):
@@ -64,7 +100,6 @@ parser = argparse.ArgumentParser(description='Train or test neural net motor con
 parser.add_argument('--train', dest='train', action='store_true', default=True)
 parser.add_argument('--test', dest='train', action='store_false', default=True)
 parser.add_argument('--steps', dest='steps', action='store', default=10000, type=int)
-parser.add_argument('--visualize', dest='visualize', action='store_true', default=False)
 parser.add_argument('--model', dest='model', action='store', default="example.h5f")
 parser.add_argument('--memory', dest='memory', action='store', default=PREFIX + "_memory.pkl")
 args = parser.parse_args()
@@ -72,8 +107,16 @@ args = parser.parse_args()
 # set to get observation in array
 
 # Load walking environment
-env = L2M2019Env(args.visualize)
+class MyEnv(L2M2019Env):
+    env = L2M2019Env(visualize=False)
+    def reset(self, **kwargs):
+        obs_dict = self.env.reset()
+        return get_observation(obs_dict)
+    def step(self, action, **kwargs):
+        obs_dict, reward, done, info = self.env.step(action)
+        return get_observation(obs_dict), reward, done, info
 
+env = MyEnv()
 #env = Arm2DVecEnv(visualize=True)
 env.reset()
 #env.reset(verbose=True, logfile='arm_log.txt')
@@ -116,7 +159,7 @@ print(critic.summary())
 memory = SequentialMemory(limit=1000000, window_length=1)
 random_process = OrnsteinUhlenbeckProcess(theta=.15, mu=0.0, sigma=.5, size=env.osim_model.noutput)
 agent = DDPGAgent(nb_actions=nb_actions, actor=actor, critic=critic, critic_action_input=action_input,
-                  memory=memory, nb_steps_warmup_critic=100000, nb_steps_warmup_actor=2000,
+                  memory=memory, nb_steps_warmup_critic=1000, nb_steps_warmup_actor=1000,
                   random_process=random_process, gamma=.99, target_model_update=1e-3,
                   delta_clip=1.)
 
@@ -127,7 +170,7 @@ agent.compile(Adam(lr=.001, clipnorm=1.), metrics=['mae'])
 # Ctrl + C.
 
 
-def build_callbacks(env_name): 
+def build_callbacks():
     checkpoint_weights_filename = PREFIX + '_weights_{step}.h5f'
     checkpoint_memory_filename = args.memory
     callbacks = [ModelIntervalCheckpoint(checkpoint_weights_filename, interval=5000)]
@@ -142,12 +185,12 @@ if args.train:
     except:
         pass
     try:
-        memory = load_memory(memory, MEMORY_PATH)
+        memory = load_memory(memory, args.memory)
         print("loaded memory with {} records".format(memory.actions.length))
     except:
         pass
     agent.fit(env, nb_steps=nallsteps, visualize=False, verbose=1, nb_max_episode_steps=5000,
-              log_interval=5000, callbacks=build_callbacks("L2M2019Env"))
+              log_interval=1000, callbacks=build_callbacks())
     # After training is done, we save the final weights.
     new_name = "_new.".join(os.path.splitext(args.model))
     agent.save_weights(args.model, overwrite=True)

@@ -72,7 +72,6 @@ for i in range(args.episodes):
     t = 0
     i = 0
     observation = env.reset()
-    while True:
         i += 1
         action = agent.forward(observation)
         observation, reward, done, info = env.step(action)
