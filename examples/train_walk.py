@@ -9,13 +9,55 @@ from keras.optimizers import Adam
 from rl.agents import DDPGAgent
 from rl.memory import SequentialMemory
 from rl.random import OrnsteinUhlenbeckProcess
-from rl.callbacks import ModelIntervalCheckpoint
+from rl.callbacks import Callback, ModelIntervalCheckpoint
 
 import sys
 sys.path = [''] + sys.path
 from osim.env import L2M2019Env
 
 import argparse
+import pickle
+
+
+PREFIX = 'ddpg_simple_1m_L2M2019Env'
+
+
+def save_memory(memory, filename):
+    mem = (memory, memory.actions,
+           memory.rewards,
+           memory.terminals,
+           memory.observations)
+    pickle.dump(mem, open(filename, "wb"), protocol=-1)  # highest protocol means binary format
+
+
+def load_memory(memory, filename):
+    (memory, memory.actions,
+     memory.rewards,
+     memory.terminals,
+     memory.observations) = pickle.load(open(filename, "rb"))
+    return memory
+
+
+class MemoryIntervalCheckpoint(Callback):
+    def __init__(self, filepath, interval, verbose=0):
+        super(MemoryIntervalCheckpoint, self).__init__()
+        self.filepath = filepath
+        self.interval = interval
+        self.verbose = verbose
+        self.total_steps = 0
+
+    def on_step_end(self, step, logs={}):
+        """ Save weights at interval steps during training """
+        self.total_steps += 1
+        if self.total_steps % self.interval != 0:
+            # Nothing to do.
+            return
+
+        filepath = self.filepath.format(step=self.total_steps, **logs)
+        if self.verbose > 0:
+            print('Step {}: saving model to {}'.format(self.total_steps, filepath))
+        save_memory(agent.memory, self.filepath)
+
 
 # Command line parameters
 parser = argparse.ArgumentParser(description='Train or test neural net motor controller')
@@ -24,6 +66,7 @@ parser.add_argument('--test', dest='train', action='store_false', default=True)
 parser.add_argument('--steps', dest='steps', action='store', default=10000, type=int)
 parser.add_argument('--visualize', dest='visualize', action='store_true', default=False)
 parser.add_argument('--model', dest='model', action='store', default="example.h5f")
+parser.add_argument('--memory', dest='memory', action='store', default=PREFIX + "_memory.pkl")
 args = parser.parse_args()
 
 # set to get observation in array
@@ -70,10 +113,10 @@ critic = Model(inputs=[action_input, observation_input], outputs=x)
 print(critic.summary())
 
 # Set up the agent for training
-memory = SequentialMemory(limit=100000, window_length=1)
-random_process = OrnsteinUhlenbeckProcess(theta=.15, mu=0.5, sigma=.5, size=env.osim_model.noutput)
+memory = SequentialMemory(limit=1000000, window_length=1)
+random_process = OrnsteinUhlenbeckProcess(theta=.15, mu=0.0, sigma=.5, size=env.osim_model.noutput)
 agent = DDPGAgent(nb_actions=nb_actions, actor=actor, critic=critic, critic_action_input=action_input,
-                  memory=memory, nb_steps_warmup_critic=2000, nb_steps_warmup_actor=2000,
+                  memory=memory, nb_steps_warmup_critic=100000, nb_steps_warmup_actor=2000,
                   random_process=random_process, gamma=.99, target_model_update=1e-3,
                   delta_clip=1.)
 
@@ -84,9 +127,11 @@ agent.compile(Adam(lr=.001, clipnorm=1.), metrics=['mae'])
 # Ctrl + C.
 
 
-def build_callbacks(env_name):
-    checkpoint_weights_filename = 'ddpg_' + env_name + '_weights_{step}.h5f'
+def build_callbacks(env_name): 
+    checkpoint_weights_filename = PREFIX + '_weights_{step}.h5f'
+    checkpoint_memory_filename = args.memory
     callbacks = [ModelIntervalCheckpoint(checkpoint_weights_filename, interval=5000)]
+    callbacks += [MemoryIntervalCheckpoint(checkpoint_memory_filename, interval=1000)]
     return callbacks
 
 
@@ -96,7 +141,12 @@ if args.train:
         print("loaded weights from {}".format(args.model))
     except:
         pass
-    agent.fit(env, nb_steps=nallsteps, visualize=False, verbose=1, nb_max_episode_steps=1000,
+    try:
+        memory = load_memory(memory, MEMORY_PATH)
+        print("loaded memory with {} records".format(memory.actions.length))
+    except:
+        pass
+    agent.fit(env, nb_steps=nallsteps, visualize=False, verbose=1, nb_max_episode_steps=5000,
               log_interval=5000, callbacks=build_callbacks("L2M2019Env"))
     # After training is done, we save the final weights.
     new_name = "_new.".join(os.path.splitext(args.model))
