@@ -10,8 +10,8 @@ from rl.agents import DDPGAgent
 from rl.memory import SequentialMemory
 from rl.random import OrnsteinUhlenbeckProcess
 from rl.callbacks import Callback, ModelIntervalCheckpoint
+from keras.callbacks import TensorBoard
 
-import sys
 from osim.env import L2M2019Env
 
 import argparse
@@ -19,8 +19,9 @@ import pickle
 import numpy as np
 
 
-PREFIX = 'snapshots/ddpg_simple_1m_L2M2019Env'
+PREFIX = 'snapshots/ddpg_simplified_vtgt_L2M2019Env'
 LENGTH0 = 1.
+obs_size = 99
 
 
 def get_observation(obs_dict):
@@ -28,8 +29,9 @@ def get_observation(obs_dict):
     res = []
 
     # target velocity field (in body frame)
-    v_tgt = np.ndarray.flatten(obs_dict['v_tgt_field'])
-    res += v_tgt.tolist()
+    #v_tgt = np.ndarray.flatten(obs_dict['v_tgt_field'])
+    v_tgt = np.array(obs_dict['v_tgt_field'])
+    res += v_tgt[:, 0, 0].tolist()
 
     res.append(obs_dict['pelvis']['height'])
     res.append(obs_dict['pelvis']['pitch'])
@@ -66,7 +68,7 @@ def save_memory(memory, filename):
     pickle.dump(mem, open(filename, "wb"), protocol=-1)  # highest protocol means binary format
 
 
-def load_memory(memory, filename):
+def load_memory(filename):
     (memory, memory.actions,
      memory.rewards,
      memory.terminals,
@@ -97,8 +99,6 @@ class MemoryIntervalCheckpoint(Callback):
 
 # Command line parameters
 parser = argparse.ArgumentParser(description='Train or test neural net motor controller')
-parser.add_argument('--train', dest='train', action='store_true', default=True)
-parser.add_argument('--test', dest='train', action='store_false', default=True)
 parser.add_argument('--steps', dest='steps', action='store', default=10000, type=int)
 parser.add_argument('--model', dest='model', action='store', default="example.h5f")
 parser.add_argument('--memory', dest='memory', action='store', default=PREFIX + "_memory.pkl")
@@ -129,7 +129,7 @@ nallsteps = args.steps
 # Create networks for DDPG
 # Next, we build a very simple model.
 actor = Sequential()
-actor.add(Flatten(input_shape=(1,) + env.observation_space.shape))
+actor.add(Flatten(input_shape=(1,) + (obs_size,)))
 actor.add(Dense(32))
 actor.add(Activation('relu'))
 actor.add(Dense(32))
@@ -141,7 +141,7 @@ actor.add(Activation('sigmoid'))
 print(actor.summary())
 
 action_input = Input(shape=(nb_actions,), name='action_input')
-observation_input = Input(shape=(1,) + env.observation_space.shape, name='observation_input')
+observation_input = Input(shape=(1,) + (obs_size,), name='observation_input')
 flattened_observation = Flatten()(observation_input)
 x = concatenate([action_input, flattened_observation])
 x = Dense(64)(x)
@@ -157,12 +157,12 @@ print(critic.summary())
 
 # Set up the agent for training
 memory = SequentialMemory(limit=1000000, window_length=1)
+#memory = load_memory(args.memory)
 random_process = OrnsteinUhlenbeckProcess(theta=.15, mu=0.0, sigma=.5, size=env.osim_model.noutput)
 agent = DDPGAgent(nb_actions=nb_actions, actor=actor, critic=critic, critic_action_input=action_input,
-                  memory=memory, nb_steps_warmup_critic=1000, nb_steps_warmup_actor=1000,
+                  memory=memory, nb_steps_warmup_critic=100, nb_steps_warmup_actor=100,
                   random_process=random_process, gamma=.99, target_model_update=1e-3,
                   delta_clip=1.)
-
 agent.compile(Adam(lr=.001, clipnorm=1.), metrics=['mae'])
 
 # Okay, now it's time to learn something! We visualize the training here for show, but this
@@ -175,27 +175,15 @@ def build_callbacks():
     checkpoint_memory_filename = args.memory
     callbacks = [ModelIntervalCheckpoint(checkpoint_weights_filename, interval=5000)]
     callbacks += [MemoryIntervalCheckpoint(checkpoint_memory_filename, interval=1000)]
+    callbacks += [TensorBoard(log_dir='./logs', histogram_freq=0,
+                              write_graph=False, write_grads=False, write_images=False,
+                              embeddings_freq=0, update_freq='epoch')]
     return callbacks
 
-
-if args.train:
-    try:
-        agent.load_weights(args.model)
-        print("loaded weights from {}".format(args.model))
-    except:
-        pass
-    try:
-        memory = load_memory(memory, args.memory)
-        print("loaded memory with {} records".format(memory.actions.length))
-    except:
-        pass
-    agent.fit(env, nb_steps=nallsteps, visualize=False, verbose=1, nb_max_episode_steps=5000,
-              log_interval=1000, callbacks=build_callbacks())
-    # After training is done, we save the final weights.
-    new_name = "_new.".join(os.path.splitext(args.model))
-    agent.save_weights(args.model, overwrite=True)
-
-if not args.train:
+try:
     agent.load_weights(args.model)
-    # Finally, evaluate our algorithm for 1 episode.
-    agent.test(env, nb_episodes=5, visualize=False, nb_max_episode_steps=1000)
+    print("loaded weights from {}".format(args.model))
+except:
+    pass
+agent.fit(env, nb_steps=nallsteps, visualize=False, verbose=1, nb_max_episode_steps=5000,
+          log_interval=1000, callbacks=build_callbacks())
